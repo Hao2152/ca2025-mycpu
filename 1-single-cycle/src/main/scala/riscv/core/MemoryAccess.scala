@@ -99,6 +99,7 @@ class MemoryAccess extends Module {
   // ============================================================
   // [CA25: Exercise 7] Store Data Alignment - Byte Strobes and Shifting
   // ============================================================
+  
   // Hint: Implement proper data alignment and byte strobes for store operations
   //
   // RISC-V Store instruction types:

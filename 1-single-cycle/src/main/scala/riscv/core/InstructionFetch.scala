@@ -41,6 +41,7 @@ class InstructionFetch extends Module {
   // ============================================================
   // [CA25: Exercise 9] PC Update Logic - Sequential vs Control Flow
   // ============================================================
+  
   // Hint: Implement program counter (PC) update logic for sequential execution
   // and control flow changes
   //

@@ -257,6 +257,7 @@ class InstructionDecode extends Module {
   // ============================================================
   // [CA25: Exercise 1] Immediate Extension - RISC-V Instruction Encoding
   // ============================================================
+  
   // Hint: RISC-V has five immediate formats, requiring correct bit-field
   // extraction and sign extension
   //
