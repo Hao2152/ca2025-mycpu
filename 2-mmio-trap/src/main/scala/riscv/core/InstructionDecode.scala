@@ -171,6 +171,7 @@ class InstructionDecode extends Module {
   // ============================================================
   // [CA25: Exercise 6] Control Signal Generation
   // ============================================================
+  
   val wbSource = WireDefault(RegWriteSource.ALUResult)
 
   when(isLoad) {

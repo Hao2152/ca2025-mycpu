@@ -167,6 +167,7 @@ class CLINT extends Module {
     // ============================================================
     // [CA25: Exercise 14] Trap Return (MRET) - mstatus State Restoration
     // ============================================================
+    
     // Hint: Implement mstatus register update during trap return (MRET instruction)
     //
     // MRET (Machine Return) state transition:

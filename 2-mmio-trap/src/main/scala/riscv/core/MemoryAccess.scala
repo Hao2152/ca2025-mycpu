@@ -33,6 +33,7 @@ class MemoryAccess extends Module {
   // ============================================================
   // [CA25: Exercise 12] Load Data Extension - Sign and Zero Extension
   // ============================================================
+  
   when(io.memory_read_enable) {
     val data  = io.memory_bundle.read_data
     val bytes = Wire(Vec(Parameters.WordSize, UInt(Parameters.ByteWidth)))

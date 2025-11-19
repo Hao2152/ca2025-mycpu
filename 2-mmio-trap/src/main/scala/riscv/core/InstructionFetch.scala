@@ -32,6 +32,7 @@ class InstructionFetch extends Module {
   // ============================================================
   // [CA25: Exercise 15] PC Update Logic - Sequential vs Control Flow with Interrupts
   // ============================================================
+  
   when(io.instruction_valid) {
     io.instruction := io.instruction_read_data
 

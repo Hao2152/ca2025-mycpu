@@ -136,12 +136,11 @@ class Execute extends Module {
   // [CA25: Exercise 5] Jump Target Address Calculation
   // ============================================================
   // Hint: Calculate branch and jump target addresses
-  //
   // Address calculation rules:
   // - Branch: PC + immediate (PC-relative)
   // - JAL: PC + immediate (PC-relative)
   // - JALR: (rs1 + immediate) & ~1 (register base, clear LSB for alignment)
-  //
+  
   val branchTarget = io.instruction_address + io.immediate
 
   val jalTarget    = branchTarget  // JAL and Branch use same calculation method

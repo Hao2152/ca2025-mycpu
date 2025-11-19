@@ -29,6 +29,7 @@ class ALUControl extends Module {
   // ============================================================
   // [CA25: Exercise 3] ALU Control Logic - Opcode/Funct3/Funct7 Decoding
   // ============================================================
+  
   // Hint: Determine which ALU operation to execute based on instruction's
   // opcode, funct3, and funct7
   //
