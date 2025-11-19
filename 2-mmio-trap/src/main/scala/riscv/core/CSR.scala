@@ -71,6 +71,7 @@ class CSR extends Module {
   // ============================================================
   // [CA25: Exercise 11] CSR Write Priority Logic
   // ============================================================
+  
   when(io.clint_access_bundle.direct_write_enable) {
     mstatus := io.clint_access_bundle.mstatus_write_data
     mepc    := io.clint_access_bundle.mepc_write_data
