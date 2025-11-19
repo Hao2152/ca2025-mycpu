@@ -1,0 +1,1229 @@
+diff --git a/1-single-cycle/src/main/scala/riscv/core/ALUControl.scala b/1-single-cycle/src/main/scala/riscv/core/ALUControl.scala
+index e808e9d..9c32be3 100644
+--- a/1-single-cycle/src/main/scala/riscv/core/ALUControl.scala
++++ b/1-single-cycle/src/main/scala/riscv/core/ALUControl.scala
+@@ -55,15 +55,19 @@ class ALUControl extends Module {
+           InstructionsTypeI.sltiu -> ALUFunctions.sltu,
+ 
+           // TODO: Complete the following mappings
+-          InstructionsTypeI.xori  -> ?,
+-          InstructionsTypeI.ori   -> ?,
+-          InstructionsTypeI.andi  -> ?,
++          InstructionsTypeI.xori  -> ALUFunctions.xor,
++          InstructionsTypeI.ori   -> ALUFunctions.or,
++          InstructionsTypeI.andi  -> ALUFunctions.and,
+ 
+           // SRLI/SRAI distinguished by funct7[5]:
+           //   funct7[5] = 0 → SRLI (logical right shift)
+           //   funct7[5] = 1 → SRAI (arithmetic right shift)
+           // TODO: Complete Mux selection logic
+-          InstructionsTypeI.sri   -> ?
++          InstructionsTypeI.sri   -> Mux(
++            io.funct7(5),
++            ALUFunctions.sra,
++            ALUFunctions.srl
++          )
+         )
+       )
+     }
+@@ -76,22 +80,30 @@ class ALUControl extends Module {
+           //   funct7[5] = 0 → ADD
+           //   funct7[5] = 1 → SUB
+           // TODO: Complete Mux selection logic
+-          InstructionsTypeR.add_sub -> ?,
++          InstructionsTypeR.add_sub -> Mux(
++            io.funct7(5),
++            ALUFunctions.sub,
++            ALUFunctions.add
++          ),
+ 
+           InstructionsTypeR.sll     -> ALUFunctions.sll,
+           InstructionsTypeR.slt     -> ALUFunctions.slt,
+           InstructionsTypeR.sltu    -> ALUFunctions.sltu,
+ 
+           // TODO: Complete the following mappings
+-          InstructionsTypeR.xor     -> ?,
+-          InstructionsTypeR.or      -> ?,
+-          InstructionsTypeR.and     -> ?,
++          InstructionsTypeR.xor     -> ALUFunctions.xor,
++          InstructionsTypeR.or      -> ALUFunctions.or,
++          InstructionsTypeR.and     -> ALUFunctions.and,
+ 
+           // SRL/SRA distinguished by funct7[5]:
+           //   funct7[5] = 0 → SRL (logical right shift)
+           //   funct7[5] = 1 → SRA (arithmetic right shift)
+           // TODO: Complete Mux selection logic
+-          InstructionsTypeR.sr      -> ?
++          InstructionsTypeR.sr      -> Mux(
++            io.funct7(5),
++            ALUFunctions.sra,
++            ALUFunctions.srl
++          )
+         )
+       )
+     }
+diff --git a/1-single-cycle/src/main/scala/riscv/core/Execute.scala b/1-single-cycle/src/main/scala/riscv/core/Execute.scala
+index b628d61..46a3a21 100644
+--- a/1-single-cycle/src/main/scala/riscv/core/Execute.scala
++++ b/1-single-cycle/src/main/scala/riscv/core/Execute.scala
+@@ -89,18 +89,17 @@ class Execute extends Module {
+   // - BLTU/BGEU: Unsigned comparison (direct comparison)
+   val branchCondition = MuxLookup(funct3, false.B)(
+     Seq(
+-      // TODO: Implement six branch conditions
+-      // Hint: Compare two register data values based on branch type
+-      InstructionsTypeB.beq  -> ?,
+-      InstructionsTypeB.bne  -> ?,
++      // BEQ / BNE
++      InstructionsTypeB.beq  -> (io.reg1_data === io.reg2_data),
++      InstructionsTypeB.bne  -> (io.reg1_data =/= io.reg2_data),
+ 
+       // Signed comparison (need conversion to signed type)
+-      InstructionsTypeB.blt  -> ?,
+-      InstructionsTypeB.bge  -> ?,
++      InstructionsTypeB.blt  -> (io.reg1_data.asSInt <  io.reg2_data.asSInt),
++      InstructionsTypeB.bge  -> (io.reg1_data.asSInt >= io.reg2_data.asSInt),
+ 
+       // Unsigned comparison
+-      InstructionsTypeB.bltu -> ?,
+-      InstructionsTypeB.bgeu -> ?
++      InstructionsTypeB.bltu -> (io.reg1_data.asUInt <  io.reg2_data.asUInt),
++      InstructionsTypeB.bgeu -> (io.reg1_data.asUInt >= io.reg2_data.asUInt)
+     )
+   )
+   val isBranch = opcode === InstructionTypes.Branch
+@@ -118,19 +117,18 @@ class Execute extends Module {
+   // - JALR: (rs1 + immediate) & ~1 (register base, clear LSB for alignment)
+   //
+   // TODO: Complete the following address calculations
+-  val branchTarget = ?
++  val branchTarget = io.instruction_address + io.immediate
+ 
+   val jalTarget    = branchTarget  // JAL and Branch use same calculation method
+ 
+   // JALR address calculation:
+   //   1. Add register value and immediate
+   //   2. Clear LSB (2-byte alignment)
+-  val jalrSum      = ?
++  val jalrSum      = io.reg1_data + io.immediate
+ 
+   // TODO: Clear LSB using bit concatenation
+   // Hint: Extract upper bits and append zero
+-  val jalrTarget   = ?
+-
++  val jalrTarget = Cat(jalrSum(31, 1), 0.U(1.W))
+   val branchTaken = isBranch && branchCondition
+   io.if_jump_flag := branchTaken || isJal || isJalr
+   io.if_jump_address := Mux(
+@@ -138,4 +136,4 @@ class Execute extends Module {
+     jalrTarget,
+     Mux(isJal, jalTarget, branchTarget)
+   )
+-}
++}
+\ No newline at end of file
+diff --git a/1-single-cycle/src/main/scala/riscv/core/InstructionDecode.scala b/1-single-cycle/src/main/scala/riscv/core/InstructionDecode.scala
+index 6b89240..e3d3b0c 100644
+--- a/1-single-cycle/src/main/scala/riscv/core/InstructionDecode.scala
++++ b/1-single-cycle/src/main/scala/riscv/core/InstructionDecode.scala
+@@ -197,11 +197,11 @@ class InstructionDecode extends Module {
+   // - JAL/JALR: Save PC+4 (return address)
+   val wbSource = WireDefault(RegWriteSource.ALUResult)
+   // TODO: Determine when to write back from Memory
+-  when(?) {
++  when(isLoad) {
+     wbSource := RegWriteSource.Memory
+   }
+   // TODO: Determine when to write back PC+4
+-  .elsewhen(?) {
++  .elsewhen(isJal||isJalr) {
+     wbSource := RegWriteSource.NextInstructionAddress
+   }
+ 
+@@ -212,7 +212,7 @@ class InstructionDecode extends Module {
+   val aluOp1Sel = WireDefault(ALUOp1Source.Register)
+   // TODO: Determine when to use PC as first operand
+   // Hint: Consider instructions that need PC-relative addressing
+-  when(?) {
++  when(isBranch||isAuipc||isJal) {
+     aluOp1Sel := ALUOp1Source.InstructionAddress
+   }
+ 
+@@ -223,7 +223,7 @@ class InstructionDecode extends Module {
+   val aluOp2Sel      = WireDefault(ALUOp2Source.Register)
+   // TODO: Determine when to use immediate as second operand
+   // Hint: Most instruction types except R-type use immediate
+-  when(?) {
++  when(needsImmediate) {
+     aluOp2Sel := ALUOp2Source.Immediate
+   }
+ 
+@@ -265,6 +265,7 @@ class InstructionDecode extends Module {
+   //   Requires sign extension to 32 bits
+   //   Hint: Use Fill() to replicate sign bit instruction(31)
+   //
++
+   val immI = Cat(
+     Fill(Parameters.DataBits - 12, instruction(31)),  // Sign extension: replicate bit 31 twenty times
+     instruction(31, 20)                                // Immediate: bits [31:20]
+@@ -277,9 +278,9 @@ class InstructionDecode extends Module {
+   //
+   // TODO: Complete S-type immediate extension
+   val immS = Cat(
+-    Fill(Parameters.DataBits - 12, instruction(?)),  // Sign extension
+-    instruction(?),                                  // High 7 bits
+-    instruction(?)                                   // Low 5 bits
++    Fill(Parameters.DataBits - 12, instruction(31)),  // Sign extension
++    instruction(31, 25),                                  // High 7 bits
++    instruction(11, 7)                                   // Low 5 bits
+   )
+ 
+   // B-type (13-bit): Used for BEQ, BNE, BLT branch instructions
+@@ -291,11 +292,11 @@ class InstructionDecode extends Module {
+   // TODO: Complete B-type immediate extension
+   val immB = Cat(
+     Fill(Parameters.DataBits - 13, instruction(31)), // Sign extension
+-    instruction(?),                                  // bit [12]
+-    instruction(?),                                  // bit [11]
+-    instruction(?),                                  // bits [10:5]
+-    instruction(?),                                  // bits [4:1]
+-    ?                                                // bit [0] = 0 (alignment)
++    instruction(31),                                  // bit [12]
++    instruction(7),                                  // bit [11]
++    instruction(30, 25),                                  // bits [10:5]
++    instruction(11, 8),                                  // bits [4:1]
++    0.U(1.W)                                                // bit [0] = 0 (alignment)
+   )
+ 
+   // U-type (20-bit): Used for LUI, AUIPC
+@@ -313,11 +314,11 @@ class InstructionDecode extends Module {
+   // TODO: Complete J-type immediate extension
+   val immJ = Cat(
+     Fill(Parameters.DataBits - 21, instruction(31)), // Sign extension
+-    instruction(?),                                  // bit [20]
+-    instruction(?),                                  // bits [19:12]
+-    instruction(?),                                  // bit [11]
+-    instruction(?),                                  // bits [10:1]
+-    ?                                                // bit [0] = 0 (alignment)
++    instruction(31),                                  // bit [20]
++    instruction(19, 12),                                  // bits [19:12]
++    instruction(20),                                  // bit [11]
++    instruction(30, 21),                                  // bits [10:1]
++    0.U(1.W)                                             // bit [0] = 0 (alignment)
+   )
+ 
+   val immediate = MuxLookup(immKind.asUInt, 0.U(Parameters.DataBits.W))(
+diff --git a/1-single-cycle/src/main/scala/riscv/core/InstructionFetch.scala b/1-single-cycle/src/main/scala/riscv/core/InstructionFetch.scala
+index 5e42648..cc9bf57 100644
+--- a/1-single-cycle/src/main/scala/riscv/core/InstructionFetch.scala
++++ b/1-single-cycle/src/main/scala/riscv/core/InstructionFetch.scala
+@@ -67,7 +67,7 @@ class InstructionFetch extends Module {
+     // - Check jump flag condition
+     // - True case: Use jump target address
+     // - False case: Sequential execution
+-    pc := ?
++    pc := Mux(io.jump_flag_id, io.jump_address_id, pc + 4.U)
+ 
+   }.otherwise {
+     // When instruction is invalid, hold PC and insert NOP (ADDI x0, x0, 0)
+@@ -76,4 +76,4 @@ class InstructionFetch extends Module {
+     io.instruction := 0x00000013.U // NOP: prevents illegal instruction execution
+   }
+   io.instruction_address := pc
+-}
++}
+\ No newline at end of file
+diff --git a/1-single-cycle/src/main/scala/riscv/core/MemoryAccess.scala b/1-single-cycle/src/main/scala/riscv/core/MemoryAccess.scala
+index 6a3a5ec..7f1b316 100644
+--- a/1-single-cycle/src/main/scala/riscv/core/MemoryAccess.scala
++++ b/1-single-cycle/src/main/scala/riscv/core/MemoryAccess.scala
+@@ -43,89 +43,43 @@ class MemoryAccess extends Module {
+   // ============================================================
+   // [CA25: Exercise 6] Load Data Extension - Sign and Zero Extension
+   // ============================================================
+-  // Hint: Implement proper sign extension and zero extension for load operations
+-  //
+-  // RISC-V Load instruction types:
+-  // - LB (Load Byte): Load 8-bit value and sign-extend to 32 bits
+-  // - LBU (Load Byte Unsigned): Load 8-bit value and zero-extend to 32 bits
+-  // - LH (Load Halfword): Load 16-bit value and sign-extend to 32 bits
+-  // - LHU (Load Halfword Unsigned): Load 16-bit value and zero-extend to 32 bits
+-  // - LW (Load Word): Load full 32-bit value, no extension needed
+-  //
+-  // Sign extension: Replicate the sign bit (MSB) to fill upper bits
+-  //   Example: LB loads 0xFF → sign-extended to 0xFFFFFFFF
+-  // Zero extension: Fill upper bits with zeros
+-  //   Example: LBU loads 0xFF → zero-extended to 0x000000FF
+   when(io.memory_read_enable) {
+-    // Optimized load logic: extract bytes/halfwords based on address alignment
+     val data  = io.memory_bundle.read_data
+     val bytes = Wire(Vec(Parameters.WordSize, UInt(Parameters.ByteWidth)))
+     for (i <- 0 until Parameters.WordSize) {
+       bytes(i) := data((i + 1) * Parameters.ByteBits - 1, i * Parameters.ByteBits)
+     }
+-    // Select byte based on lower 2 address bits (mem_address_index)
++
+     val byte = bytes(mem_address_index)
+-    // Select halfword based on bit 1 of address (word-aligned halfwords)
+     val half = Mux(mem_address_index(1), Cat(bytes(3), bytes(2)), Cat(bytes(1), bytes(0)))
+ 
+-    // TODO: Complete sign/zero extension for load operations
+-    // Hint:
+-    // - Use Fill to replicate a bit multiple times
+-    // - For sign extension: Fill with the sign bit (MSB)
+-    // - For zero extension: Fill with zeros
+-    // - Use Cat to concatenate extension bits with loaded data
+     io.wb_memory_read_data := MuxLookup(io.funct3, 0.U)(
+       Seq(
+-        // TODO: Complete LB (sign-extend byte)
+-        // Hint: Replicate sign bit, then concatenate with byte
+-        InstructionsTypeL.lb  -> ?,
++        // LB — sign extend byte
++        InstructionsTypeL.lb  -> Cat(Fill(24, byte(7)), byte),
+ 
+-        // TODO: Complete LBU (zero-extend byte)
+-        // Hint: Fill upper bits with zero, then concatenate with byte
+-        InstructionsTypeL.lbu -> ?,
++        // LBU — zero extend byte
++        InstructionsTypeL.lbu -> Cat(0.U(24.W), byte),
+ 
+-        // TODO: Complete LH (sign-extend halfword)
+-        // Hint: Replicate sign bit, then concatenate with halfword
+-        InstructionsTypeL.lh  -> ?,
++        // LH — sign extend halfword
++        InstructionsTypeL.lh  -> Cat(Fill(16, half(15)), half),
+ 
+-        // TODO: Complete LHU (zero-extend halfword)
+-        // Hint: Fill upper bits with zero, then concatenate with halfword
+-        InstructionsTypeL.lhu -> ?,
++        // LHU — zero extend halfword
++        InstructionsTypeL.lhu -> Cat(0.U(16.W), half),
+ 
+-        // LW: Load full word, no extension needed (completed example)
++        // LW — full word
+         InstructionsTypeL.lw  -> data
+       )
+     )
++
+   // ============================================================
+   // [CA25: Exercise 7] Store Data Alignment - Byte Strobes and Shifting
+   // ============================================================
+-  // Hint: Implement proper data alignment and byte strobes for store operations
+-  //
+-  // RISC-V Store instruction types:
+-  // - SB (Store Byte): Write 8-bit value to memory at byte-aligned address
+-  // - SH (Store Halfword): Write 16-bit value to memory at halfword-aligned address
+-  // - SW (Store Word): Write 32-bit value to memory at word-aligned address
+-  //
+-  // Key concepts:
+-  // 1. Byte strobes: Control which bytes in a 32-bit word are written
+-  //    - SB: 1 strobe active (at mem_address_index position)
+-  //    - SH: 2 strobes active (based on address bit 1)
+-  //    - SW: All 4 strobes active
+-  // 2. Data shifting: Align data to correct byte position in 32-bit word
+-  //    - mem_address_index (bits 1:0) indicates byte position
+-  //    - Left shift by (mem_address_index * 8) bits for byte operations
+-  //    - Left shift by 16 bits for upper halfword
+-  //
+-  // Examples:
+-  // - SB to address 0x1002 (index=2): data[7:0] → byte 2, strobe[2]=1
+-  // - SH to address 0x1002 (index=2): data[15:0] → bytes 2-3, strobes[2:3]=1
+   }.elsewhen(io.memory_write_enable) {
+     io.memory_bundle.write_enable := true.B
+     io.memory_bundle.address      := io.alu_result
+ 
+     val data = io.reg2_data
+-    // Optimized store logic: reduce combinational depth by simplifying shift operations
+-    // mem_address_index is already computed from address alignment (bits 1:0)
+     val strobeInit   = VecInit(Seq.fill(Parameters.WordSize)(false.B))
+     val defaultData  = 0.U(Parameters.DataWidth)
+     val writeStrobes = WireInit(strobeInit)
+@@ -133,37 +87,34 @@ class MemoryAccess extends Module {
+ 
+     switch(io.funct3) {
+       is(InstructionsTypeS.sb) {
+-        // TODO: Complete store byte logic
+-        // Hint:
+-        // 1. Enable single byte strobe at appropriate position
+-        // 2. Shift byte data to correct position based on address
+-        writeStrobes(?) := true.B
+-        writeData := data(?) << (mem_address_index << ?)
++        // SB — write one byte
++        writeStrobes(mem_address_index) := true.B
++        writeData := (data(7,0) << (mem_address_index << 3))
+       }
++
+       is(InstructionsTypeS.sh) {
+-        // TODO: Complete store halfword logic
+-        // Hint: Check address to determine lower/upper halfword position
+-        when(mem_address_index(___) === 0.U) {
+-          // Lower halfword (bytes 0-1)
+-          // TODO: Enable strobes for lower two bytes, no shifting needed
+-          writeStrobes(?) := true.B
+-          writeStrobes(?) := true.B
+-          writeData := data(?)
++        // SH — write two bytes
++        when(mem_address_index(1) === 0.U) {
++          // lower halfword (bytes 0–1)
++          writeStrobes(0) := true.B
++          writeStrobes(1) := true.B
++          writeData := data(15,0)
+         }.otherwise {
+-          // Upper halfword (bytes 2-3)
+-          // TODO: Enable strobes for upper two bytes, apply appropriate shift
+-          writeStrobes(?) := true.B
+-          writeStrobes(?) := true.B
+-          writeData := data(?) << ?
++          // upper halfword (bytes 2–3)
++          writeStrobes(2) := true.B
++          writeStrobes(3) := true.B
++          writeData := (data(15,0) << 16)
+         }
+       }
++
+       is(InstructionsTypeS.sw) {
+-        // Store word: enable all byte strobes, no shifting needed (completed example)
++        // SW — write full word
+         writeStrobes := VecInit(Seq.fill(Parameters.WordSize)(true.B))
+         writeData    := data
+       }
+     }
++
+     io.memory_bundle.write_data   := writeData
+     io.memory_bundle.write_strobe := writeStrobes
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/1-single-cycle/src/main/scala/riscv/core/WriteBack.scala b/1-single-cycle/src/main/scala/riscv/core/WriteBack.scala
+index d660876..d11b57a 100644
+--- a/1-single-cycle/src/main/scala/riscv/core/WriteBack.scala
++++ b/1-single-cycle/src/main/scala/riscv/core/WriteBack.scala
+@@ -43,10 +43,10 @@ class WriteBack extends Module {
+   //
+   // TODO: Complete MuxLookup to multiplex writeback sources
+   // Hint: Specify default value and cases for each source type
+-  io.regs_write_data := MuxLookup(io.regs_write_source, ?)(
++  io.regs_write_data := MuxLookup(io.regs_write_source, io.alu_result)(
+     Seq(
+-      RegWriteSource.Memory                 -> ?,
+-      RegWriteSource.NextInstructionAddress -> ?
++      RegWriteSource.Memory                 -> io.memory_read_data,
++      RegWriteSource.NextInstructionAddress -> (io.instruction_address + 4.U)
+     )
+   )
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/ALUControl.scala b/2-mmio-trap/src/main/scala/riscv/core/ALUControl.scala
+index e808e9d..0d3080c 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/ALUControl.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/ALUControl.scala
+@@ -48,22 +48,21 @@ class ALUControl extends Module {
+       io.alu_funct := MuxLookup(io.funct3, ALUFunctions.zero)(
+         Seq(
+           // TODO: Map funct3 to corresponding ALU operation
+-          // Hint: Refer to definitions in InstructionsTypeI object
+           InstructionsTypeI.addi  -> ALUFunctions.add,  // Completed example
+           InstructionsTypeI.slli  -> ALUFunctions.sll,
+           InstructionsTypeI.slti  -> ALUFunctions.slt,
+           InstructionsTypeI.sltiu -> ALUFunctions.sltu,
+ 
+           // TODO: Complete the following mappings
+-          InstructionsTypeI.xori  -> ?,
+-          InstructionsTypeI.ori   -> ?,
+-          InstructionsTypeI.andi  -> ?,
++          InstructionsTypeI.xori  -> ALUFunctions.xor,
++          InstructionsTypeI.ori   -> ALUFunctions.or,
++          InstructionsTypeI.andi  -> ALUFunctions.and,
+ 
+           // SRLI/SRAI distinguished by funct7[5]:
+           //   funct7[5] = 0 → SRLI (logical right shift)
+           //   funct7[5] = 1 → SRAI (arithmetic right shift)
+           // TODO: Complete Mux selection logic
+-          InstructionsTypeI.sri   -> ?
++          InstructionsTypeI.sri   -> Mux(io.funct7(5), ALUFunctions.sra, ALUFunctions.srl)
+         )
+       )
+     }
+@@ -76,26 +75,26 @@ class ALUControl extends Module {
+           //   funct7[5] = 0 → ADD
+           //   funct7[5] = 1 → SUB
+           // TODO: Complete Mux selection logic
+-          InstructionsTypeR.add_sub -> ?,
++          InstructionsTypeR.add_sub -> Mux(io.funct7(5), ALUFunctions.sub, ALUFunctions.add),
+ 
+           InstructionsTypeR.sll     -> ALUFunctions.sll,
+           InstructionsTypeR.slt     -> ALUFunctions.slt,
+           InstructionsTypeR.sltu    -> ALUFunctions.sltu,
+ 
+           // TODO: Complete the following mappings
+-          InstructionsTypeR.xor     -> ?,
+-          InstructionsTypeR.or      -> ?,
+-          InstructionsTypeR.and     -> ?,
++          InstructionsTypeR.xor     -> ALUFunctions.xor,
++          InstructionsTypeR.or      -> ALUFunctions.or,
++          InstructionsTypeR.and     -> ALUFunctions.and,
+ 
+           // SRL/SRA distinguished by funct7[5]:
+           //   funct7[5] = 0 → SRL (logical right shift)
+           //   funct7[5] = 1 → SRA (arithmetic right shift)
+           // TODO: Complete Mux selection logic
+-          InstructionsTypeR.sr      -> ?
++          InstructionsTypeR.sr      -> Mux(io.funct7(5), ALUFunctions.sra, ALUFunctions.srl)
+         )
+       )
+     }
+     // All other instruction types use ADD for address/immediate calculation
+     // (Branch, Load, Store, JAL, JALR, LUI, AUIPC) - handled by default assignment above
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/CLINT.scala b/2-mmio-trap/src/main/scala/riscv/core/CLINT.scala
+index ca324bf..3772c3f 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/CLINT.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/CLINT.scala
+@@ -213,4 +213,4 @@ class CLINT extends Module {
+     io.csr_bundle.direct_write_enable := false.B
+   }
+   // io.interrupt_handler_address := io.csr_bundle.mepc
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/CSR.scala b/2-mmio-trap/src/main/scala/riscv/core/CSR.scala
+index 87d42e7..bb36877 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/CSR.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/CSR.scala
+@@ -20,74 +20,6 @@ object CSRRegister {
+   val CycleH   = 0xc80.U(Parameters.CSRRegisterAddrWidth)
+ }
+ 
+-/**
+- * CSR: Control and Status Registers for machine-mode privilege operations
+- *
+- * Implements RISC-V Privileged Specification v1.10 machine-mode CSRs for
+- * trap handling, interrupt control, and status management.
+- *
+- * Implemented CSRs:
+- * - mstatus (0x300): Machine status register
+- *   - MIE bit (bit 3): Global machine interrupt enable
+- *   - MPIE bit (bit 7): Prior interrupt enable (saved on trap entry)
+- * - mie (0x304): Machine interrupt enable register
+- *   - MTIE bit (bit 7): Timer interrupt enable
+- *   - MEIE bit (bit 11): External interrupt enable
+- * - mtvec (0x305): Machine trap vector base address
+- *   - MODE bits [1:0]: Always 0 (direct mode, no vectoring)
+- *   - BASE bits [31:2]: Trap handler address (4-byte aligned)
+- * - mscratch (0x340): Machine scratch register for trap handler context
+- * - mepc (0x341): Machine exception program counter (return address after trap)
+- * - mcause (0x342): Machine trap cause
+- *   - Interrupt bit (bit 31): 1=interrupt, 0=exception
+- *   - Exception code bits [30:0]: Identifies specific trap cause
+- * - cycle (0xC00): Lower 32 bits of 64-bit cycle counter (read-only)
+- * - cycleh (0xC80): Upper 32 bits of 64-bit cycle counter (read-only)
+- *
+- * Write Priority and Atomic Operations:
+- * When both CLINT and CPU pipeline attempt to write CSRs simultaneously,
+- * CLINT writes take priority to ensure atomic trap entry.
+- *
+- * Implementation (lines 138-159):
+- * 1. Trap-managed CSRs (mstatus, mepc, mcause) - lines 138-150:
+- *    - when(CLINT direct_write_enable): CLINT writes during trap entry
+- *    - elsewhen(CPU write_enable): CPU CSR instructions (only if CLINT idle)
+- *    - CLINT priority ensures trap state cannot be corrupted
+- *
+- * 2. CPU-only CSRs (mie, mtvec, mscratch) - lines 152-159:
+- *    - when(CPU write_enable): Always CPU-controlled
+- *    - CLINT never writes these registers
+- *    - Separate when block, no priority arbitration needed
+- *
+- * Atomic Guarantees:
+- * - Single-cycle execution ensures no race conditions within module
+- * - CLINT priority prevents partial trap state updates
+- * - Read operations see consistent state due to combinational read paths
+- *
+- * Interrupt Handling Sequence:
+- * 1. CLINT detects interrupt condition and asserts direct_write_enable
+- * 2. CSR module atomically updates:
+- *    - mstatus: Save MIE to MPIE, clear MIE (disable interrupts)
+- *    - mepc: Save current PC (return address)
+- *    - mcause: Record interrupt cause code
+- * 3. InstructionFetch vectors PC to mtvec handler address
+- * 4. Trap handler executes, eventually issues MRET
+- * 5. MRET restores MIE from MPIE and returns to mepc
+- *
+- * Interface:
+- * - reg_read_address_id: CSR address for read (ID stage)
+- * - reg_write_enable_id: Enable CSR write (ID stage decode)
+- * - reg_write_address_id: CSR address for write (ID stage)
+- * - reg_write_data_ex: CSR write data (EX stage computed)
+- * - clint_access_bundle: Bidirectional CLINT interface for trap handling
+- * - debug_reg_read_address/data: Debug interface for testbench inspection
+- *
+- * Implementation Notes:
+- * - Cycle counter increments every clock cycle (64-bit, no overflow handling)
+- * - Read operations are combinational (MuxLookup from register values)
+- * - Write operations are registered (take effect next cycle)
+- * - Reset values: All CSRs initialized to 0 (interrupts disabled at reset)
+- */
+ class CSR extends Module {
+   val io = IO(new Bundle {
+     val reg_read_address_id    = Input(UInt(Parameters.CSRRegisterAddrWidth))
+@@ -109,43 +41,27 @@ class CSR extends Module {
+   val mepc     = RegInit(UInt(Parameters.DataWidth), 0.U)
+   val mcause   = RegInit(UInt(Parameters.DataWidth), 0.U)
+   val cycles   = RegInit(UInt(64.W), 0.U)
++
+   // ============================================================
+   // [CA25: Exercise 10] CSR Register Lookup Table - CSR Address Mapping
+   // ============================================================
+-  // Hint: Map CSR addresses to corresponding registers
+-  //
+-  // CSR addresses defined in CSRRegister object:
+-  // - MSTATUS (0x300): Machine status register
+-  // - MIE (0x304): Machine interrupt enable register
+-  // - MTVEC (0x305): Machine trap vector base address
+-  // - MSCRATCH (0x340): Machine scratch register
+-  // - MEPC (0x341): Machine exception program counter
+-  // - MCAUSE (0x342): Machine trap cause
+-  // - CycleL (0xC00): Cycle counter low 32 bits
+-  // - CycleH (0xC80): Cycle counter high 32 bits
+   val regLUT =
+     IndexedSeq(
+-      // TODO: Complete CSR address to register mapping
+-      CSRRegister.MSTATUS  -> ?,
+-      CSRRegister.MIE      -> ?,
+-      CSRRegister.MTVEC    -> ?,
+-      CSRRegister.MSCRATCH -> ?,
+-      CSRRegister.MEPC     -> ?,
+-      CSRRegister.MCAUSE   -> ?,
++      CSRRegister.MSTATUS  -> mstatus,
++      CSRRegister.MIE      -> mie,
++      CSRRegister.MTVEC    -> mtvec,
++      CSRRegister.MSCRATCH -> mscratch,
++      CSRRegister.MEPC     -> mepc,
++      CSRRegister.MCAUSE   -> mcause,
+ 
+-      // 64-bit cycle counter split into high and low 32 bits
+-      // TODO: Extract low 32 bits and high 32 bits from cycles
+-      CSRRegister.CycleL   -> ?,
+-      CSRRegister.CycleH   -> ?,
++      CSRRegister.CycleL   -> cycles(31, 0),
++      CSRRegister.CycleH   -> cycles(63, 32),
+     )
+   cycles := cycles + 1.U
+ 
+-  // If the pipeline and the CLINT are going to write the CSR at the same time, CLINT writes take priority.
+-  // Interrupt entry (CLINT) must override normal CSR writes to properly handle traps.
+   io.reg_read_data       := MuxLookup(io.reg_read_address_id, 0.U)(regLUT)
+   io.debug_reg_read_data := MuxLookup(io.debug_reg_read_address, 0.U)(regLUT)
+ 
+-  // what data should be passed from csr to clint (Note: what should clint see is the next state of the CPU)
+   io.clint_access_bundle.mstatus := mstatus
+   io.clint_access_bundle.mtvec   := mtvec
+   io.clint_access_bundle.mcause  := mcause
+@@ -155,47 +71,29 @@ class CSR extends Module {
+   // ============================================================
+   // [CA25: Exercise 11] CSR Write Priority Logic
+   // ============================================================
+-  // Hint: Handle priority when both CLINT and CPU write to CSRs simultaneously
+-  //
+-  // Write priority rules:
+-  // 1. CLINT direct write (interrupt handling): Highest priority
+-  // 2. CPU CSR instruction write: Secondary priority
+-  //
+-  // CSRs requiring atomic update (interrupt-related):
+-  // - mstatus: Save/restore interrupt enable state
+-  // - mepc: Save exception return address
+-  // - mcause: Record trap cause
+   when(io.clint_access_bundle.direct_write_enable) {
+-    // Atomic update when CLINT triggers interrupt
+-    // TODO: Which CSRs does CLINT need to write?
+-    ? := io.clint_access_bundle.mstatus_write_data
+-    ? := io.clint_access_bundle.mepc_write_data
+-    ? := io.clint_access_bundle.mcause_write_data
++    mstatus := io.clint_access_bundle.mstatus_write_data
++    mepc    := io.clint_access_bundle.mepc_write_data
++    mcause  := io.clint_access_bundle.mcause_write_data
++
+   }.elsewhen(io.reg_write_enable_id) {
+-    // CPU CSR instruction write
+-    // TODO: Update corresponding CSR based on write address
+     when(io.reg_write_address_id === CSRRegister.MSTATUS) {
+-      mstatus := ?
++      mstatus := io.reg_write_data_ex
+     }.elsewhen(io.reg_write_address_id === CSRRegister.MEPC) {
+-      ? := io.reg_write_data_ex
++      mepc := io.reg_write_data_ex
+     }.elsewhen(io.reg_write_address_id === CSRRegister.MCAUSE) {
+-      ? := io.reg_write_data_ex
++      mcause := io.reg_write_data_ex
+     }
+   }
+ 
+-  // CPU-exclusive CSRs (CLINT never writes these):
+-  // - mie: Machine interrupt enable bits
+-  // - mtvec: Machine trap vector base address
+-  // - mscratch: Machine scratch register for trap handlers
++  // CPU-only writable CSRs
+   when(io.reg_write_enable_id) {
+-    // TODO: Complete write logic for these CSRs
+     when(io.reg_write_address_id === CSRRegister.MIE) {
+-      ? := io.reg_write_data_ex
++      mie := io.reg_write_data_ex
+     }.elsewhen(io.reg_write_address_id === CSRRegister.MTVEC) {
+-      ? := io.reg_write_data_ex
++      mtvec := io.reg_write_data_ex
+     }.elsewhen(io.reg_write_address_id === CSRRegister.MSCRATCH) {
+-      ? := io.reg_write_data_ex
++      mscratch := io.reg_write_data_ex
+     }
+   }
+-
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/Execute.scala b/2-mmio-trap/src/main/scala/riscv/core/Execute.scala
+index 1b2ff6e..6861a77 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/Execute.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/Execute.scala
+@@ -115,18 +115,17 @@ class Execute extends Module {
+   // - BLTU/BGEU: Unsigned comparison (direct comparison)
+   val branchCondition = MuxLookup(funct3, false.B)(
+     Seq(
+-      // TODO: Implement six branch conditions
+-      // Hint: Compare two register data values based on branch type
+-      InstructionsTypeB.beq  -> ?,
+-      InstructionsTypeB.bne  -> ?,
++      // Equality / Inequality
++      InstructionsTypeB.beq  -> (io.reg1_data === io.reg2_data),
++      InstructionsTypeB.bne  -> (io.reg1_data =/= io.reg2_data),
+ 
+-      // Signed comparison (need conversion to signed type)
+-      InstructionsTypeB.blt  -> ?,
+-      InstructionsTypeB.bge  -> ?,
++      // Signed comparison
++      InstructionsTypeB.blt  -> (io.reg1_data.asSInt < io.reg2_data.asSInt),
++      InstructionsTypeB.bge  -> (io.reg1_data.asSInt >= io.reg2_data.asSInt),
+ 
+       // Unsigned comparison
+-      InstructionsTypeB.bltu -> ?,
+-      InstructionsTypeB.bgeu -> ?
++      InstructionsTypeB.bltu -> (io.reg1_data < io.reg2_data),
++      InstructionsTypeB.bgeu -> (io.reg1_data >= io.reg2_data)
+     )
+   )
+   val isBranch = opcode === InstructionTypes.Branch
+@@ -143,21 +142,20 @@ class Execute extends Module {
+   // - JAL: PC + immediate (PC-relative)
+   // - JALR: (rs1 + immediate) & ~1 (register base, clear LSB for alignment)
+   //
+-  // TODO: Complete the following address calculations
+-  val branchTarget = ?
++  val branchTarget = io.instruction_address + io.immediate
+ 
+   val jalTarget    = branchTarget  // JAL and Branch use same calculation method
+ 
+   // JALR address calculation:
+   //   1. Add register value and immediate
+   //   2. Clear LSB (2-byte alignment)
+-  val jalrSum      = ?
++  val jalrSum      = io.reg1_data + io.immediate
+ 
+-  // TODO: Clear LSB using bit concatenation
++  // Clear LSB using bit concatenation
+   // Hint: Extract upper bits and append zero
+-  val jalrTarget   = ?
++  val jalrTarget   = Cat(jalrSum(31, 1), 0.U(1.W))
+ 
+   val branchTaken = isBranch && branchCondition
+   io.if_jump_flag    := branchTaken || isJal || isJalr
+   io.if_jump_address := Mux(isJalr, jalrTarget, Mux(isJal, jalTarget, branchTarget))
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/InstructionDecode.scala b/2-mmio-trap/src/main/scala/riscv/core/InstructionDecode.scala
+index c18f7f2..610959d 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/InstructionDecode.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/InstructionDecode.scala
+@@ -119,47 +119,6 @@ object ImmediateKind extends ChiselEnum {
+   val None, I, S, B, U, J = Value
+ }
+ 
+-/**
+- * InstructionDecode: Instruction field extraction and control signal generation
+- *
+- * Pipeline Stage: ID (Instruction Decode)
+- *
+- * Key Responsibilities:
+- * - Extract instruction fields (opcode, rd, rs1, rs2, funct3, funct7, CSR address)
+- * - Generate control signals for Execute, Memory, and WriteBack stages
+- * - Decode and sign-extend immediate values based on instruction format
+- * - Determine ALU operand sources (register vs PC, register vs immediate)
+- * - Identify register file and CSR read/write operations
+- * - Configure memory access (read/write enable signals)
+- *
+- * RV32I Instruction Formats Decoded:
+- * - R-type: Register-register operations (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU)
+- * - I-type: Immediate operations and loads (ADDI, SLTI, ANDI, ORI, XORI, LB, LH, LW, JALR)
+- * - S-type: Store operations (SB, SH, SW)
+- * - B-type: Branch operations (BEQ, BNE, BLT, BGE, BLTU, BGEU)
+- * - U-type: Upper immediate (LUI, AUIPC)
+- * - J-type: Jump (JAL)
+- *
+- * Zicsr Extension (CSR Instructions):
+- * - CSRRW/CSRRWI: Atomic read-write CSR
+- * - CSRRS/CSRRSI: Atomic read and set bits in CSR
+- * - CSRRC/CSRRCI: Atomic read and clear bits in CSR
+- * - CSR address extracted from inst[31:20] (12-bit CSR space)
+- * - Immediate variant (I-suffix) uses zimm from inst[19:15] (5-bit zero-extended)
+- *
+- * Control Signal Generation:
+- * - reg_write_enable: Enable writing to rd (false for branches, stores, CSR ops without rd)
+- * - csr_reg_write_enable: Enable CSR write operation
+- * - memory_read_enable: Asserted for load instructions
+- * - memory_write_enable: Asserted for store instructions
+- * - ex_aluop1_source: Select PC vs rs1 for ALU operand 1
+- * - ex_aluop2_source: Select immediate vs rs2 for ALU operand 2
+- * - wb_reg_write_source: Select ALU result, memory data, CSR data, or PC+4 for rd
+- *
+- * Interface:
+- * - Input: 32-bit instruction from IF stage
+- * - Outputs: Control signals to EX/MEM/WB, immediate value, register addresses, CSR address
+- */
+ class InstructionDecode extends Module {
+   val io = IO(new Bundle {
+     val instruction = Input(UInt(Parameters.InstructionWidth))
+@@ -212,52 +171,27 @@ class InstructionDecode extends Module {
+   // ============================================================
+   // [CA25: Exercise 6] Control Signal Generation
+   // ============================================================
+-  // Hint: Generate correct control signals based on instruction type
+-  //
+-  // Need to determine three key multiplexer selections:
+-  // 1. WriteBack data source selection (wbSource)
+-  // 2. ALU operand 1 selection (aluOp1Sel)
+-  // 3. ALU operand 2 selection (aluOp2Sel)
+-
+-  // WriteBack data source selection:
+-  // - Default: ALU result
+-  // - Load instructions: Read from Memory
+-  // - CSR instructions: Read from CSR
+-  // - JAL/JALR: Save PC+4 (return address)
+   val wbSource = WireDefault(RegWriteSource.ALUResult)
+-  // TODO: Determine when to write back from Memory
+-  when(?) {
++
++  when(isLoad) {
+     wbSource := RegWriteSource.Memory
+   }
+-  // TODO: Determine when to write back from CSR
+-  .elsewhen(?) {
++  .elsewhen(isCsr) {
+     wbSource := RegWriteSource.CSR
+   }
+-  // TODO: Determine when to write back PC+4
+-  .elsewhen(?) {
++  .elsewhen(isJal || isJalr) {
+     wbSource := RegWriteSource.NextInstructionAddress
+   }
+ 
+-  // ALU operand 1 selection:
+-  // - Default: Register rs1
+-  // - Branch/AUIPC/JAL: Use PC (for calculating target address or PC+offset)
+-  //
+   val aluOp1Sel = WireDefault(ALUOp1Source.Register)
+-  // TODO: Determine when to use PC as first operand
+-  // Hint: Consider instructions that need PC-relative addressing
+-  when(?) {
++  when(isBranch || isAuipc || isJal || isJalr) {
+     aluOp1Sel := ALUOp1Source.InstructionAddress
+   }
+ 
+-  // ALU operand 2 selection:
+-  // - Default: Register rs2 (for R-type instructions)
+-  // - I-type/S-type/B-type/U-type/J-type: Use immediate
+   val needsImmediate =
+     isLoad || isStore || isOpImm || isBranch || isLui || isAuipc || isJal || isJalr
+   val aluOp2Sel = WireDefault(ALUOp2Source.Register)
+-  // TODO: Determine when to use immediate as second operand
+-  // Hint: Most instruction types except R-type use immediate
+-  when(?) {
++  when(needsImmediate) {
+     aluOp2Sel := ALUOp2Source.Immediate
+   }
+ 
+@@ -302,67 +236,38 @@ class InstructionDecode extends Module {
+   // ============================================================
+   // [CA25: Exercise 1] Immediate Extension - RISC-V Instruction Encoding
+   // ============================================================
+-  // Hint: RISC-V has five immediate formats, requiring correct bit-field
+-  // extraction and sign extension
+-  //
+-  // I-type (12-bit): Used for ADDI, LW, JALR, etc.
+-  //   Immediate located at inst[31:20]
+-  //   Requires sign extension to 32 bits
+-  //   Hint: Use Fill() to replicate sign bit instruction(31)
+-  //
+   val immI = Cat(
+-    Fill(Parameters.DataBits - 12, instruction(31)),  // Sign extension: replicate bit 31 twenty times
+-    instruction(31, 20)                                // Immediate: bits [31:20]
++    Fill(Parameters.DataBits - 12, instruction(31)),
++    instruction(31, 20)
+   )
+ 
+-  // S-type (12-bit): Used for SW, SH, SB store instructions
+-  //   Immediate split into two parts: inst[31:25] and inst[11:7]
+-  //   Need to concatenate these parts then sign extend
+-  //   Hint: High bits at upper field, low bits at lower field
+-  //
+-  // TODO: Complete S-type immediate extension
++  // S-type
+   val immS = Cat(
+-    Fill(Parameters.DataBits - 12, instruction(?)),  // Sign extension
+-    instruction(?),                                  // High 7 bits
+-    instruction(?)                                   // Low 5 bits
++    Fill(Parameters.DataBits - 12, instruction(31)),
++    instruction(31, 25),
++    instruction(11, 7)
+   )
+ 
+-  // B-type (13-bit): Used for BEQ, BNE, BLT branch instructions
+-  //   Immediate requires reordering: {sign, bit11, bits[10:5], bits[4:1], 0}
+-  //   Note: LSB is always 0 (2-byte alignment)
+-  //   Requires sign extension to 32 bits
+-  //   Hint: B-type bit order is scrambled, must reorder per specification
+-  //
+-  // TODO: Complete B-type immediate extension
++  // B-type
+   val immB = Cat(
+-    Fill(Parameters.DataBits - 13, instruction(31)), // Sign extension
+-    instruction(?),                                  // bit [12]
+-    instruction(?),                                  // bit [11]
+-    instruction(?),                                  // bits [10:5]
+-    instruction(?),                                  // bits [4:1]
+-    ?                                                // bit [0] = 0 (alignment)
++    Fill(Parameters.DataBits - 13, instruction(31)),
++    instruction(31),
++    instruction(7),
++    instruction(30, 25),
++    instruction(11, 8),
++    0.U(1.W)
+   )
+ 
+-  // U-type (20-bit): Used for LUI, AUIPC
+-  //   Immediate located at inst[31:12], low 12 bits filled with zeros
+-  //   No sign extension needed (placed directly in upper 20 bits)
+-  //   Hint: U-type places 20 bits in result's upper bits, fills low 12 bits with 0
+   val immU = Cat(instruction(31, 12), 0.U(12.W))
+ 
+-  // J-type (21-bit): Used for JAL
+-  //   Immediate requires reordering: {sign, bits[19:12], bit11, bits[10:1], 0}
+-  //   Note: LSB is always 0 (2-byte alignment)
+-  //   Requires sign extension to 32 bits
+-  //   Hint: J-type bit order is scrambled, similar to B-type
+-  //
+-  // TODO: Complete J-type immediate extension
++  // J-type
+   val immJ = Cat(
+-    Fill(Parameters.DataBits - 21, instruction(31)), // Sign extension
+-    instruction(?),                                  // bit [20]
+-    instruction(?),                                  // bits [19:12]
+-    instruction(?),                                  // bit [11]
+-    instruction(?),                                  // bits [10:1]
+-    ?                                                // bit [0] = 0 (alignment)
++    Fill(Parameters.DataBits - 21, instruction(31)),
++    instruction(31),
++    instruction(19, 12),
++    instruction(20),
++    instruction(30, 21),
++    0.U(1.W)
+   )
+ 
+   val immediate = MuxLookup(immKind.asUInt, 0.U(Parameters.DataBits.W))(
+@@ -375,4 +280,4 @@ class InstructionDecode extends Module {
+     )
+   )
+   io.ex_immediate := immediate
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/InstructionFetch.scala b/2-mmio-trap/src/main/scala/riscv/core/InstructionFetch.scala
+index 75579a9..66a7707 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/InstructionFetch.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/InstructionFetch.scala
+@@ -32,47 +32,25 @@ class InstructionFetch extends Module {
+   // ============================================================
+   // [CA25: Exercise 15] PC Update Logic - Sequential vs Control Flow with Interrupts
+   // ============================================================
+-  // Hint: Implement program counter (PC) update logic for sequential execution,
+-  // control flow changes, and interrupt handling
+-  //
+-  // PC update rules:
+-  // 1. Interrupt asserted: PC = interrupt handler address (highest priority)
+-  //    - When interrupt is asserted, vector to trap handler
+-  //    - Saves current PC to mepc before jump (handled by CLINT)
+-  // 2. Control flow (jump/branch taken): PC = jump target address
+-  //    - When jump flag is asserted, use jump address
+-  //    - Covers: JAL, JALR, taken branches, and MRET
+-  // 3. Sequential execution: PC = PC + 4
+-  //    - When no interrupt/jump/branch, increment PC by 4 bytes (next instruction)
+-  //    - RISC-V instructions are 4 bytes (32 bits) in RV32I
+-  // 4. Invalid instruction: PC = PC (hold current value)
+-  //    - When instruction is invalid, don't update PC
+-  //    - Insert NOP to prevent illegal instruction execution
+-  //
+-  // Priority: Interrupt > Jump/Branch > Sequential
+-  //
+-  // Examples:
+-  // - Normal ADD: PC = 0x1000 → next PC = 0x1004 (sequential)
+-  // - JAL offset: PC = 0x1000, target = 0x2000 → next PC = 0x2000 (control flow)
+-  // - Timer interrupt: PC = 0x1000, handler = 0x8000 → next PC = 0x8000 (interrupt)
+   when(io.instruction_valid) {
+     io.instruction := io.instruction_read_data
+ 
+-    // TODO: Complete PC update logic with interrupt priority
+-    // Hint: Use nested multiplexer to implement priority: interrupt > jump > sequential
+-    // - Outermost multiplexer: Check interrupt condition
+-    //   - True: Use interrupt handler address
+-    //   - False: Check jump/branch condition
+-    // - Inner multiplexer: Check jump flag
+-    //   - True: Use jump target address
+-    //   - False: Sequential execution
+-    pc := ?
++    // Priority: Interrupt > Jump > Sequential
++    pc := Mux(
++      io.interrupt_assert,                         // interrupt has highest priority
++      io.interrupt_handler_address,                // PC = interrupt handler
++      Mux(
++        io.jump_flag_id,                           // next priority: jump/branch
++        io.jump_address_id,                        // PC = jump target
++        pc + 4.U                                    // otherwise sequential PC+4
++      )
++    )
+ 
+   }.otherwise {
+-    // When instruction is invalid, hold PC and insert NOP (ADDI x0, x0, 0)
+-    // NOP = 0x00000013 allows pipeline to continue safely without side effects
++    // instruction invalid → hold PC and issue NOP
+     pc             := pc
+-    io.instruction := 0x00000013.U // NOP: prevents illegal instruction execution
++    io.instruction := 0x00000013.U // NOP
+   }
++
+   io.instruction_address := pc
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/MemoryAccess.scala b/2-mmio-trap/src/main/scala/riscv/core/MemoryAccess.scala
+index c82cdb2..eabd9fd 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/MemoryAccess.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/MemoryAccess.scala
+@@ -33,150 +33,92 @@ class MemoryAccess extends Module {
+   // ============================================================
+   // [CA25: Exercise 12] Load Data Extension - Sign and Zero Extension
+   // ============================================================
+-  // Hint: Implement proper sign extension and zero extension for load operations
+-  //
+-  // RISC-V Load instruction types:
+-  // - LB (Load Byte): Load 8-bit value and sign-extend to 32 bits
+-  // - LBU (Load Byte Unsigned): Load 8-bit value and zero-extend to 32 bits
+-  // - LH (Load Halfword): Load 16-bit value and sign-extend to 32 bits
+-  // - LHU (Load Halfword Unsigned): Load 16-bit value and zero-extend to 32 bits
+-  // - LW (Load Word): Load full 32-bit value, no extension needed
+-  //
+-  // Sign extension: Replicate the sign bit (MSB) to fill upper bits
+-  //   Example: LB loads 0xFF → sign-extended to 0xFFFFFFFF
+-  // Zero extension: Fill upper bits with zeros
+-  //   Example: LBU loads 0xFF → zero-extended to 0x000000FF
+   when(io.memory_read_enable) {
+-    // Optimized load logic: extract bytes/halfwords based on address alignment
+     val data  = io.memory_bundle.read_data
+     val bytes = Wire(Vec(Parameters.WordSize, UInt(Parameters.ByteWidth)))
+     for (i <- 0 until Parameters.WordSize) {
+       bytes(i) := data((i + 1) * Parameters.ByteBits - 1, i * Parameters.ByteBits)
+     }
+-    // Select byte based on lower 2 address bits (mem_address_index)
+     val byte = bytes(mem_address_index)
+-    // Select halfword based on bit 1 of address (word-aligned halfwords)
+     val half = Mux(mem_address_index(1), Cat(bytes(3), bytes(2)), Cat(bytes(1), bytes(0)))
+ 
+-    // TODO: Complete sign/zero extension for load operations
+-    // Hint:
+-    // - Use Fill to replicate a bit multiple times
+-    // - For sign extension: Fill with the sign bit (MSB)
+-    // - For zero extension: Fill with zeros
+-    // - Use Cat to concatenate extension bits with loaded data
+-    //
+-    // Note: This optimized implementation uses MuxLookup for byte selection
+-    // to handle all possible byte positions (0, 1, 2, 3) in a 32-bit word
+     io.wb_memory_read_data := MuxLookup(io.funct3, 0.U)(
+       Seq(
+-        // TODO: Complete LB (sign-extend byte)
+-        // Hint: Replicate sign bit, then concatenate with byte
+-        InstructionsTypeL.lb -> MuxLookup(mem_address_index, Cat(Fill(24, data(31)), data(31, 24)))(
++
++        // LB (sign-extend byte)
++        InstructionsTypeL.lb -> MuxLookup(mem_address_index,
++          Cat(Fill(24, bytes(3)(7)), bytes(3)))(
+           Seq(
+-            0.U -> ?,
+-            1.U -> ?,
+-            2.U -> ?
++            0.U -> Cat(Fill(24, bytes(0)(7)), bytes(0)),
++            1.U -> Cat(Fill(24, bytes(1)(7)), bytes(1)),
++            2.U -> Cat(Fill(24, bytes(2)(7)), bytes(2))
+           )
+         ),
+ 
+-        // TODO: Complete LBU (zero-extend byte)
+-        // Hint: Fill upper bits with zero, then concatenate with byte
+-        InstructionsTypeL.lbu -> MuxLookup(mem_address_index, Cat(Fill(24, 0.U), data(31, 24)))(
++        // LBU (zero-extend byte)
++        InstructionsTypeL.lbu -> MuxLookup(mem_address_index,
++          Cat(Fill(24, 0.U), bytes(3)))(
+           Seq(
+-            0.U -> ?,
+-            1.U -> ?,
+-            2.U -> ?
++            0.U -> Cat(Fill(24, 0.U), bytes(0)),
++            1.U -> Cat(Fill(24, 0.U), bytes(1)),
++            2.U -> Cat(Fill(24, 0.U), bytes(2))
+           )
+         ),
+ 
+-        // TODO: Complete LH (sign-extend halfword)
+-        // Hint: Replicate sign bit, then concatenate with halfword
++        // LH (sign-extend halfword)
+         InstructionsTypeL.lh -> Mux(
+           mem_address_index === 0.U,
+-          ?,
+-          ?
++          Cat(Fill(16, half(15)), half),
++          Cat(Fill(16, half(15)), half)
+         ),
+ 
+-        // TODO: Complete LHU (zero-extend halfword)
+-        // Hint: Fill upper bits with zero, then concatenate with halfword
++        // LHU (zero-extend halfword)
+         InstructionsTypeL.lhu -> Mux(
+           mem_address_index === 0.U,
+-          ?,
+-          ?
++          Cat(Fill(16, 0.U), half),
++          Cat(Fill(16, 0.U), half)
+         ),
+ 
+-        // LW: Load full word, no extension needed (completed example)
++        // LW (no extension)
+         InstructionsTypeL.lw -> data
+       )
+     )
++
+   // ============================================================
+   // [CA25: Exercise 13] Store Data Alignment - Byte Strobes and Shifting
+   // ============================================================
+-  // Hint: Implement proper data alignment and byte strobes for store operations
+-  //
+-  // RISC-V Store instruction types:
+-  // - SB (Store Byte): Write 8-bit value to memory at byte-aligned address
+-  // - SH (Store Halfword): Write 16-bit value to memory at halfword-aligned address
+-  // - SW (Store Word): Write 32-bit value to memory at word-aligned address
+-  //
+-  // Key concepts:
+-  // 1. Byte strobes: Control which bytes in a 32-bit word are written
+-  //    - SB: 1 strobe active (at mem_address_index position)
+-  //    - SH: 2 strobes active (based on address bit 1)
+-  //    - SW: All 4 strobes active
+-  // 2. Data shifting: Align data to correct byte position in 32-bit word
+-  //    - mem_address_index (bits 1:0) indicates byte position
+-  //    - Left shift by (mem_address_index * 8) bits for byte operations
+-  //    - Left shift by 16 bits for upper halfword
+-  //
+-  // Examples:
+-  // - SB to address 0x1002 (index=2): data[7:0] → byte 2, strobe[2]=1
+-  // - SH to address 0x1002 (index=2): data[15:0] → bytes 2-3, strobes[2:3]=1
+   }.elsewhen(io.memory_write_enable) {
+     io.memory_bundle.write_data   := io.reg2_data
+     io.memory_bundle.write_enable := true.B
+     io.memory_bundle.write_strobe := VecInit(Seq.fill(Parameters.WordSize)(false.B))
+ 
+-    // Optimized store logic: reduce combinational depth by simplifying shift operations
+-    // mem_address_index is already computed from address alignment (bits 1:0)
+     when(io.funct3 === InstructionsTypeS.sb) {
+-      // TODO: Complete store byte logic
+-      // Hint:
+-      // 1. Enable single byte strobe at appropriate position
+-      // 2. Shift byte data to correct position based on address
+-      io.memory_bundle.write_strobe(?) := true.B
+-      io.memory_bundle.write_data := io.reg2_data(?) << (mem_address_index << ?)
++      // SB: enable 1 byte strobe, shift 8 * index
++      io.memory_bundle.write_strobe(mem_address_index) := true.B
++      io.memory_bundle.write_data :=
++        (io.reg2_data(7, 0) << (mem_address_index << 3.U))
+ 
+     }.elsewhen(io.funct3 === InstructionsTypeS.sh) {
+-      // TODO: Complete store halfword logic
+-      // Hint: Check address to determine lower/upper halfword position
+-      when(mem_address_index(?) === 0.U) {
+-        // Lower halfword (bytes 0-1)
+-        // TODO: Enable strobes for bytes 0 and 1, no shifting needed
++      // SH: halfword write (bytes 0-1 or 2-3)
++      when(mem_address_index(1) === 0.U) {
++        // lower halfword (bytes 0,1)
+         for (i <- 0 until Parameters.WordSize / 2) {
+           io.memory_bundle.write_strobe(i) := true.B
+         }
+-        io.memory_bundle.write_data := io.reg2_data(
+-          Parameters.WordSize / 2 * Parameters.ByteBits - 1,
+-          0
+-        )
++        io.memory_bundle.write_data := io.reg2_data(15, 0)
+       }.otherwise {
+-        // Upper halfword (bytes 2-3)
+-        // TODO: Enable strobes for bytes 2 and 3, shift left by 16 bits
++        // upper halfword (bytes 2,3)
+         for (i <- Parameters.WordSize / 2 until Parameters.WordSize) {
+           io.memory_bundle.write_strobe(i) := true.B
+         }
+-        io.memory_bundle.write_data := io.reg2_data(
+-          Parameters.WordSize / 2 * Parameters.ByteBits - 1,
+-          0
+-        ) << (Parameters.WordSize / 2 * Parameters.ByteBits)
++        io.memory_bundle.write_data :=
++          (io.reg2_data(15, 0) << 16)
+       }
+ 
+     }.elsewhen(io.funct3 === InstructionsTypeS.sw) {
+-      // Store word: enable all byte strobes, no shifting needed (completed example)
+       for (i <- 0 until Parameters.WordSize) {
+         io.memory_bundle.write_strobe(i) := true.B
+       }
+     }
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/2-mmio-trap/src/main/scala/riscv/core/WriteBack.scala b/2-mmio-trap/src/main/scala/riscv/core/WriteBack.scala
+index dcddf7b..5c2f9d3 100644
+--- a/2-mmio-trap/src/main/scala/riscv/core/WriteBack.scala
++++ b/2-mmio-trap/src/main/scala/riscv/core/WriteBack.scala
+@@ -52,11 +52,11 @@ class WriteBack extends Module {
+   //
+   // TODO: Complete MuxLookup to multiplex writeback sources with CSR support
+   // Hint: Specify default value and cases for each source type, including CSR
+-  io.regs_write_data := MuxLookup(io.regs_write_source, ?)(
++  io.regs_write_data := MuxLookup(io.regs_write_source, io.alu_result)(
+     Seq(
+-      RegWriteSource.Memory                 -> ?,
+-      RegWriteSource.CSR                    -> ?,
+-      RegWriteSource.NextInstructionAddress -> ?
++      RegWriteSource.Memory                 -> io.memory_read_data,
++      RegWriteSource.CSR                    -> io.csr_read_data,
++      RegWriteSource.NextInstructionAddress -> (io.instruction_address + 4.U)
+     )
+   )
+-}
++}
+\ No newline at end of file

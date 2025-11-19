@@ -32,47 +32,25 @@ class InstructionFetch extends Module {
   // ============================================================
   // [CA25: Exercise 15] PC Update Logic - Sequential vs Control Flow with Interrupts
   // ============================================================
-  // Hint: Implement program counter (PC) update logic for sequential execution,
-  // control flow changes, and interrupt handling
-  //
-  // PC update rules:
-  // 1. Interrupt asserted: PC = interrupt handler address (highest priority)
-  //    - When interrupt is asserted, vector to trap handler
-  //    - Saves current PC to mepc before jump (handled by CLINT)
-  // 2. Control flow (jump/branch taken): PC = jump target address
-  //    - When jump flag is asserted, use jump address
-  //    - Covers: JAL, JALR, taken branches, and MRET
-  // 3. Sequential execution: PC = PC + 4
-  //    - When no interrupt/jump/branch, increment PC by 4 bytes (next instruction)
-  //    - RISC-V instructions are 4 bytes (32 bits) in RV32I
-  // 4. Invalid instruction: PC = PC (hold current value)
-  //    - When instruction is invalid, don't update PC
-  //    - Insert NOP to prevent illegal instruction execution
-  //
-  // Priority: Interrupt > Jump/Branch > Sequential
-  //
-  // Examples:
-  // - Normal ADD: PC = 0x1000 → next PC = 0x1004 (sequential)
-  // - JAL offset: PC = 0x1000, target = 0x2000 → next PC = 0x2000 (control flow)
-  // - Timer interrupt: PC = 0x1000, handler = 0x8000 → next PC = 0x8000 (interrupt)
   when(io.instruction_valid) {
     io.instruction := io.instruction_read_data
 
-    // TODO: Complete PC update logic with interrupt priority
-    // Hint: Use nested multiplexer to implement priority: interrupt > jump > sequential
-    // - Outermost multiplexer: Check interrupt condition
-    //   - True: Use interrupt handler address
-    //   - False: Check jump/branch condition
-    // - Inner multiplexer: Check jump flag
-    //   - True: Use jump target address
-    //   - False: Sequential execution
-    pc := ?
+    // Priority: Interrupt > Jump > Sequential
+    pc := Mux(
+      io.interrupt_assert,                         // interrupt has highest priority
+      io.interrupt_handler_address,                // PC = interrupt handler
+      Mux(
+        io.jump_flag_id,                           // next priority: jump/branch
+        io.jump_address_id,                        // PC = jump target
+        pc + 4.U                                    // otherwise sequential PC+4
+      )
+    )
 
   }.otherwise {
-    // When instruction is invalid, hold PC and insert NOP (ADDI x0, x0, 0)
-    // NOP = 0x00000013 allows pipeline to continue safely without side effects
+    // instruction invalid → hold PC and issue NOP
     pc             := pc
-    io.instruction := 0x00000013.U // NOP: prevents illegal instruction execution
+    io.instruction := 0x00000013.U // NOP
   }
+
   io.instruction_address := pc
 }
